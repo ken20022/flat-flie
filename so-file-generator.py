@@ -73,6 +73,7 @@ def generate_header_line(customer_code, user_id, email=''):
     return '|'.join(fields) + '|'
 
 def validate_record_line(fields):
+    print(f"DEBUG validate_record_line received fields: {fields}")
     fields = [f.strip() for f in fields]  # Strip all fields first
     if len(fields) < 11:
         return False, "Record must have at least 11 fields"
@@ -81,9 +82,9 @@ def validate_record_line(fields):
         return False, "RecordIdentifier must be 'HH'"
 
     supplier_code = fields[1].strip()
+    print(f"Supplier Code: '{supplier_code}'")
     if len(supplier_code) != 5 or not re.fullmatch(r'[A-Za-z0-9]{5}', supplier_code):
         return False, "SupplierCageCode must be exactly 5 alphanumeric chars"
-
 
     if not (1 <= len(fields[2]) <= 32) or not fields[2].isdigit():
         return False, "MessageSeqID must be numeric 1 to 32 digits"
@@ -186,7 +187,10 @@ def on_generate():
 
         records = []
         for line in raw_lines:
-            fields = line.split('|') if '|' in line else line.split(',')
+            # Normalize delimiter to always split by '|'
+            normalized_line = line.replace(',', '|')
+            fields = [f.strip() for f in normalized_line.split('|')]
+            print(f"DEBUG on_generate split fields: {fields}")
             if len(fields) < 11:
                 fields += [''] * (11 - len(fields))
             records.append(fields)
