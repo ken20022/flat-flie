@@ -8,7 +8,6 @@ def validate_field(value: str, code: str) -> bool:
     value = value.strip()
     if not value:
         return False
-
     if code == 'A':
         return bool(re.fullmatch(r'[A-Za-z]+', value))
     elif code == 'N':
@@ -34,8 +33,7 @@ def generate_filename(cic: str, seq: int) -> str:
     now = datetime.datetime.now()
     date_str = now.strftime('%Y%m%d')
     time_str = now.strftime('%H%M%S')
-    filename = f"SO_Message_{date_str}_{time_str}_{cic}_{seq}.txt"
-    return filename
+    return f"SO_Message_{date_str}_{time_str}_{cic}_{seq}.txt"
 
 def generate_header_line(customer_code, user_id, email=''):
     customer_code = customer_code.strip()
@@ -59,30 +57,23 @@ def generate_header_line(customer_code, user_id, email=''):
         if not re.match(r'^[a-zA-Z0-9._\-@#]+$', email):
             raise ValueError("Email address contains invalid characters")
 
-    record_identifier = "FH"
-    version = "ARSOUploadv2.0"
-
     fields = [
-        record_identifier,
-        version,
+        "FH",
+        "ARSOUploadv2.0",
         customer_code,
         user_id,
         email
     ]
-
     return '|'.join(fields) + '|'
 
 def validate_record_line(fields):
-    print(f"DEBUG validate_record_line received fields: {fields}")
-    fields = [f.strip() for f in fields]  # Strip all fields first
-    if len(fields) < 11:
-        return False, "Record must have at least 11 fields"
-
+    fields = [f.strip() for f in fields]
+    if len(fields) < 52:
+        return False, f"Record must have at least 52 fields, got {len(fields)}"
     if fields[0] != "HH":
         return False, "RecordIdentifier must be 'HH'"
 
-    supplier_code = fields[1].strip()
-    print(f"Supplier Code: '{supplier_code}'")
+    supplier_code = fields[1]
     if len(supplier_code) != 5 or not re.fullmatch(r'[A-Za-z0-9]{5}', supplier_code):
         return False, "SupplierCageCode must be exactly 5 alphanumeric chars"
 
@@ -103,7 +94,7 @@ def validate_record_line(fields):
     if not re.fullmatch(r'\d', fields[5]):
         return False, "OrderType must be a single digit"
 
-    if fields[6] not in ("N","C","X"):
+    if fields[6] not in ("N", "C", "X"):
         return False, "TransactionType must be 'N', 'C', or 'X'"
 
     if not re.fullmatch(r'^[A-Za-z0-9\- ]{1,25}$', fields[7]):
@@ -134,9 +125,7 @@ def write_flat_file(records, cic, seq, filepath, customer_code, user_id, email='
             valid, msg = validate_record_line(record)
             if not valid:
                 raise ValueError(f"Record line {idx+1} error: {msg}")
-
-            trimmed = [str(field).strip() if field is not None else '' for field in record]
-            line = '|'.join(trimmed) + '|'
+            line = '|'.join([str(field).strip() if field is not None else '' for field in record]) + '|'
             f.write(line + '\r\n')
 
 def set_entry_valid(entry_widget, is_valid):
@@ -147,6 +136,58 @@ def limit_size_entry(max_len):
         return len(P) <= max_len
     return callback
 
+def on_import_file():
+    filepath = filedialog.askopenfilename(
+        title="Select Record File",
+        filetypes=[("Text files", "*.txt"), ("CSV files", "*.csv"), ("All files", "*.*")]
+    )
+    if not filepath:
+        return
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            raw_lines = [line.rstrip('\n') for line in f]
+
+        records = []
+        current_record_lines = []
+
+        for line in raw_lines:
+            if line.startswith("HH|"):
+                # New record starts
+                if current_record_lines:
+                    # Join previous record lines (preserving internal newlines)
+                    full_record = '\n'.join(current_record_lines)
+                    records.append(full_record)
+                current_record_lines = [line]
+            else:
+                # Continuation of previous record
+                if current_record_lines:
+                    current_record_lines.append(line)
+                else:
+                    # Line not starting with HH but no current record — ignore or log
+                    pass
+
+        # Append last record if exists
+        if current_record_lines:
+            full_record = '\n'.join(current_record_lines)
+            records.append(full_record)
+
+        # Parse records into fields splitting by '|'
+        parsed_records = []
+        for rec in records:
+            fields = rec.split('|')
+            fields = [f.strip() for f in fields]
+
+            # Pad to 52 fields if shorter
+            if len(fields) < 52:
+                fields += [''] * (52 - len(fields))
+            parsed_records.append(fields)
+
+        root.imported_records = parsed_records
+        messagebox.showinfo("Import Successful", f"Imported {len(parsed_records)} records from:\n{filepath}")
+
+    except Exception as e:
+        messagebox.showerror("Import Failed", f"Could not import file:\n{e}")
+
 def on_generate():
     try:
         cic = entry_cic.get().strip()
@@ -154,7 +195,12 @@ def on_generate():
         customer_code = entry_customer_code.get()
         user_id = entry_user_id.get()
         email = entry_email.get()
-        raw_text = text_records.get("1.0", tk.END).strip()
+
+        if not hasattr(root, 'imported_records') or not root.imported_records:
+            messagebox.showerror("Error", "Please import records from a file first")
+            return
+
+        records = root.imported_records
 
         if not cic:
             messagebox.showerror("Error", "CIC cannot be empty")
@@ -179,21 +225,6 @@ def on_generate():
             messagebox.showerror("Error", "Email address must be 7-100 chars and contain only allowed characters")
             return
         set_entry_valid(entry_email, True)
-
-        raw_lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
-        if not raw_lines:
-            messagebox.showerror("Error", "Please enter at least one record")
-            return
-
-        records = []
-        for line in raw_lines:
-            # Normalize delimiter to always split by '|'
-            normalized_line = line.replace(',', '|')
-            fields = [f.strip() for f in normalized_line.split('|')]
-            print(f"DEBUG on_generate split fields: {fields}")
-            if len(fields) < 11:
-                fields += [''] * (11 - len(fields))
-            records.append(fields)
 
         default_filename = generate_filename(cic, seq)
         filepath = filedialog.asksaveasfilename(
@@ -244,12 +275,10 @@ tk.Label(root, text="Email Address (optional):").grid(row=4, column=0, sticky="w
 entry_email = tk.Entry(root, validate='key', validatecommand=vcmd_email)
 entry_email.grid(row=4, column=1, pady=5, padx=5)
 
-tk.Label(root, text="Enter Records (one per line, fields separated by | or ,):").grid(row=5, column=0, columnspan=2, sticky="w")
-
-text_records = tk.Text(root, width=60, height=15)
-text_records.grid(row=6, column=0, columnspan=2, pady=5, padx=5)
+btn_import = tk.Button(root, text="Import Records from File", command=on_import_file)
+btn_import.grid(row=5, column=0, columnspan=2, pady=10)
 
 btn_generate = tk.Button(root, text="Generate Flat File", command=on_generate)
-btn_generate.grid(row=7, column=0, columnspan=2, pady=10)
+btn_generate.grid(row=6, column=0, columnspan=2, pady=10)
 
 root.mainloop()
